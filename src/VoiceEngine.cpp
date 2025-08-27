@@ -15,8 +15,15 @@ struct PaState {
     int sampleRate = 16000;
     int channels = 1;
     int frameSamples = 320; // 20ms @16k
+    int inIndex = -1;       // tercih edilen input cihaz index (PortAudio)
+    int outIndex = -1;      // tercih edilen output cihaz index
 };
 PaState g;
+}
+
+void AudioIO::setPreferredDevices(int inIndex, int outIndex){
+    g.inIndex = inIndex;
+    g.outIndex = outIndex;
 }
 
 bool AudioIO::startCapture(int sampleRate, int channels) {
@@ -25,12 +32,11 @@ bool AudioIO::startCapture(int sampleRate, int channels) {
     g.frameSamples = frameSamples(sampleRate, 20);
 
     PaStreamParameters inParams{};
-    inParams.device = Pa_GetDefaultInputDevice();
+    inParams.device = (g.inIndex >= 0 ? g.inIndex : Pa_GetDefaultInputDevice());
     inParams.channelCount = channels;
     inParams.sampleFormat = paInt16;
-    inParams.suggestedLatency = 0.02;
+    inParams.suggestedLatency = 0.05; // 50 ms daha toleranslı
 
-    // Bloklu okuma (callback yok)
     if (Pa_OpenStream(&g.in, &inParams, nullptr, sampleRate, g.frameSamples,
                       paNoFlag, nullptr, nullptr) != paNoError) return false;
     return Pa_StartStream(g.in) == paNoError;
@@ -38,10 +44,11 @@ bool AudioIO::startCapture(int sampleRate, int channels) {
 
 bool AudioIO::startPlayback(int sampleRate, int channels) {
     PaStreamParameters outParams{};
-    outParams.device = Pa_GetDefaultOutputDevice();
+    outParams.device = (g.outIndex >= 0 ? g.outIndex : Pa_GetDefaultOutputDevice());
     outParams.channelCount = channels;
     outParams.sampleFormat = paInt16;
-    outParams.suggestedLatency = 0.02;
+    outParams.suggestedLatency = 0.05;
+
     if (Pa_OpenStream(&g.out, nullptr, &outParams, sampleRate, g.frameSamples,
                       paNoFlag, nullptr, nullptr) != paNoError) return false;
     return Pa_StartStream(g.out) == paNoError;
@@ -67,7 +74,7 @@ void AudioIO::stop() {
 
 // ---------- SimpleVAD ----------
 void SimpleVAD::configure(float thRms, int hangMs) {
-    thr_=thRms; hangSamples_=hangMs*16; // ~16 samples/ms @16k (yaklaşık)
+    thr_=thRms; hangSamples_=hangMs*16;
 }
 bool SimpleVAD::isSpeech(const int16_t* pcm, int n, int) {
     double s=0; for (int i=0;i<n;i++){ s += double(pcm[i])*pcm[i]; }
@@ -139,6 +146,10 @@ static uint32_t nowMs(){
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+void VoiceEngine::setDevices(int inIndex, int outIndex){
+    audio_.setPreferredDevices(inIndex, outIndex);
+}
+
 bool VoiceEngine::init(const VoiceParams& vp, ITransport* tr, uint32_t convId){
     vp_=vp; tr_=tr; convId_=convId;
     if (!audio_.startCapture(vp.sampleRate,1)) return false;
@@ -154,7 +165,7 @@ bool VoiceEngine::init(const VoiceParams& vp, ITransport* tr, uint32_t convId){
     return true;
 }
 
-void VoiceEngine::setPtt(bool){ /* dışarıdan yönetilecek */ }
+void VoiceEngine::setPtt(bool){}
 
 void VoiceEngine::onRx(const uint8_t* data, size_t len){
     if (len < sizeof(MeshVoiceHeader)) return;
@@ -187,10 +198,9 @@ void VoiceEngine::pollOnce(){
                 std::memcpy(pkt.data(), &hdr, sizeof(hdr));
                 std::memcpy(pkt.data()+sizeof(hdr), encBuf, encLen);
 
-                if (localEcho_) {
-                    onRx(pkt.data(), pkt.size());
-                }
+                if (localEcho_) { onRx(pkt.data(), pkt.size()); }
                 tr_->send(pkt.data(), pkt.size());
+                txFrames_++;
             }
         }
     }
@@ -204,10 +214,15 @@ void VoiceEngine::pollOnce(){
         if (ns>0) {
             outPcm.resize(ns);
             audio_.writeFrame(outPcm);
+            rxFrames_++;
         } else {
             std::vector<int16_t> zeros(outPcm.size(), 0);
             audio_.writeFrame(zeros);
         }
+    } else {
+        // underrun azalt: paket yoksa sessizlik bas
+        std::vector<int16_t> zeros( audio_.frameSamples(vp_.sampleRate, vp_.frameMs), 0 );
+        audio_.writeFrame(zeros);
     }
 }
 

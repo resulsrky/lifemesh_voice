@@ -9,12 +9,11 @@
 
 #include "NoiseSuppressorSpeex.hpp"
 
-// -------- Paket başlığı --------
 #pragma pack(push,1)
 struct MeshVoiceHeader {
     uint8_t  version = 1;
-    uint8_t  codec   = 1;      // 1=Opus
-    uint8_t  flags   = 0;      // bit0=PTT, bit1=DTN, bit2=FEC
+    uint8_t  codec   = 1;
+    uint8_t  flags   = 0;
     uint8_t  hop     = 0;
     uint16_t seq     = 0;
     uint32_t convId  = 0;
@@ -23,7 +22,6 @@ struct MeshVoiceHeader {
 };
 #pragma pack(pop)
 
-// -------- Transport arayüzü --------
 class ITransport {
 public:
     using RxHandler = std::function<void(const uint8_t*, size_t)>;
@@ -32,17 +30,15 @@ public:
     virtual ~ITransport() = default;
 };
 
-// -------- Parametreler --------
 struct VoiceParams {
     int sampleRate   = 16000;
     int frameMs      = 20;
     int bitrateBps   = 12000;
     bool opusFec     = true;
-    bool opusDtx     = false;   // debug için kapalı (istersen tekrar true)
+    bool opusDtx     = false;  // debug için kapalı
     int expectedLoss = 15;
 };
 
-// -------- Audio I/O --------
 class AudioIO {
 public:
     bool startCapture(int sampleRate, int channels);
@@ -53,9 +49,10 @@ public:
     int  frameSamples(int sampleRate, int frameMs) const {
         return sampleRate * frameMs / 1000;
     }
+    // EKLE: tercih edilen cihaz indekslerini (PortAudio index) ayarla
+    void setPreferredDevices(int inIndex, int outIndex);
 };
 
-// -------- Basit VAD --------
 class SimpleVAD {
 public:
     void configure(float thRms = 300.0f, int hangMs = 150);
@@ -64,7 +61,6 @@ private:
     int hangSamples_ = 0, remain_ = 0; float thr_=300.f;
 };
 
-// -------- Opus codec --------
 class OpusCodec {
 public:
     bool initEnc(int sampleRate, int bitrateBps, bool fec, bool dtx, int expectedLoss);
@@ -77,7 +73,6 @@ private:
     struct OpusDecoder* dec_ = nullptr;
 };
 
-// -------- Jitter buffer --------
 struct EncodedFrame {
     uint16_t seq;
     std::vector<uint8_t> payload;
@@ -96,15 +91,21 @@ private:
     std::mutex m_;
 };
 
-// -------- VoiceEngine --------
 class VoiceEngine {
 public:
+    // Cihaz tercihlerini init'ten ÖNCE ayarla (PortAudio index; -1 = varsayılan)
+    void setDevices(int inIndex, int outIndex);
     bool init(const VoiceParams& vp, ITransport* tr, uint32_t convId);
     void setPtt(bool down);
     void setLocalEcho(bool on) { localEcho_ = on; }
     void setBypassVad(bool on) { bypassVad_ = on; }
     void pollOnce();
     void shutdown();
+
+    // Sayaç getter'ları
+    uint64_t txFrames() const { return txFrames_; }
+    uint64_t rxFrames() const { return rxFrames_; }
+
 private:
     VoiceParams vp_;
     ITransport* tr_ = nullptr;
@@ -115,10 +116,13 @@ private:
     SimpleVAD vad_;
     OpusCodec codec_;
     JitterBuffer jb_{3};
-    NoiseSuppressorSpeex ns_;   // NS/AGC
+    NoiseSuppressorSpeex ns_;
 
     bool localEcho_ = false;
     bool bypassVad_ = false;
+
+    uint64_t txFrames_ = 0;
+    uint64_t rxFrames_ = 0;
 
     void onRx(const uint8_t* data, size_t len);
 };
