@@ -1,43 +1,52 @@
 #include "NoiseSuppressorSpeex.hpp"
+#include <iostream>
 
-#ifdef LIFEMESH_HAVE_SPEEXDSP
-#include <speex/speex_preprocess.h>
+NoiseSuppressorSpeex::NoiseSuppressorSpeex() {}
+NoiseSuppressorSpeex::~NoiseSuppressorSpeex() {
+    if (st_) {
+        speex_preprocess_state_destroy(st_);
+        st_ = nullptr;
+    }
+}
 
-bool NoiseSuppressorSpeex::init(int sampleRate, int frameSamples, bool enableAgc, int noiseSuppressDb){
-    fs_ = sampleRate; frame_ = frameSamples; agc_ = enableAgc; nsDb_ = noiseSuppressDb;
+bool NoiseSuppressorSpeex::init(int sampleRate, int frameSize, bool enableAgc, int agcTarget) {
+    sampleRate_ = sampleRate;
+    frameSize_ = frameSize;
 
-    st_ = speex_preprocess_state_init(frame_, fs_);
-    if (!st_) return false;
+    st_ = speex_preprocess_state_init(frameSize_, sampleRate_);
+    if (!st_) {
+        std::cerr << "Speex preprocessor init failed\n";
+        return false;
+    }
 
     int i = 1;
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_DENOISE, &i);
 
-    i = nsDb_;
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, &i);
+    // Noise suppression (hafif, sesi boğmayacak şekilde)
+    speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_DENOISE, &i);
+    int noiseSuppressDb = -15;  // daha az agresif (önceden -30’du)
+    speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, &noiseSuppressDb);
 
-    i = 0; // kendi VAD’imiz var
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_VAD, &i);
-
-    i = agc_ ? 1 : 0;
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_AGC, &i);
-
-    int agcLevel = 20000; // hedef ~telefon seviyesi
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_AGC_TARGET, &agcLevel);
-
+    // VAD'i kapatıyoruz, çünkü kendi VAD zincirimiz var
     i = 0;
-    speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_DEREVERB, &i);
+    speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_VAD, &i);
+
+    // AGC ayarları
+    if (enableAgc) {
+        i = 1;
+        speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_AGC, &i);
+        int target = agcTarget > 0 ? agcTarget : 16000; // default 16k amplitude
+        speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_AGC_TARGET, &target);
+    }
+
+    // Reverb removal opsiyonel (kapalı bırakıyoruz)
+    i = 0;
+    speex_preprocess_ctl(st_, SPEEX_PREPROCESS_SET_DEREVERB, &i);
 
     return true;
 }
 
-void NoiseSuppressorSpeex::process(int16_t* pcm, int nSamples){
-    if (!st_ || nSamples != frame_) return;
-    speex_preprocess_run((SpeexPreprocessState*)st_, pcm);
+void NoiseSuppressorSpeex::process(int16_t* pcm, int frameSize) {
+    if (!st_) return;
+    int vad = speex_preprocess_run(st_, pcm);
+    (void)vad; // kendi VAD zincirimiz var, bunu kullanmıyoruz
 }
-
-void NoiseSuppressorSpeex::shutdown(){
-    if (st_) { speex_preprocess_state_destroy((SpeexPreprocessState*)st_); st_ = nullptr; }
-}
-#else
-// stub
-#endif

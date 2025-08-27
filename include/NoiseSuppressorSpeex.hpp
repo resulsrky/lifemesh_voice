@@ -1,25 +1,18 @@
 #pragma once
 #include <cstdint>
+#include <vector>
+#include <speex/speex_preprocess.h>
 
-#ifdef LIFEMESH_HAVE_SPEEXDSP
 class NoiseSuppressorSpeex {
 public:
-    bool init(int sampleRate, int frameSamples, bool enableAgc = true, int noiseSuppressDb = -15);
-    void process(int16_t* pcm, int nSamples);
-    void shutdown();
-    ~NoiseSuppressorSpeex(){ shutdown(); }
+    NoiseSuppressorSpeex();
+    ~NoiseSuppressorSpeex();
+
+    bool init(int sampleRate, int frameSize, bool enableAgc, int agcTarget);
+    void process(int16_t* pcm, int frameSize);
+
 private:
-    void* st_ = nullptr; // SpeexPreprocessState*
-    int   fs_ = 16000;
-    int   frame_ = 320;
-    bool  agc_ = true;
-    int   nsDb_ = -15;
+    SpeexPreprocessState* st_ = nullptr;
+    int sampleRate_ = 16000;
+    int frameSize_ = 320;
 };
-#else
-class NoiseSuppressorSpeex {
-public:
-    bool init(int, int, bool=true, int=-15) { return false; }
-    void process(int16_t*, int) {}
-    void shutdown() {}
-};
-#endif
