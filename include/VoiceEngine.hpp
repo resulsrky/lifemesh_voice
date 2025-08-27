@@ -7,7 +7,7 @@
 #include <mutex>
 #include <optional>
 
-#include "NoiseSuppressorSpeex.hpp"  // NS/AGC (varsa gerçek, yoksa stub)
+#include "NoiseSuppressorSpeex.hpp"
 
 // -------- Paket başlığı --------
 #pragma pack(push,1)
@@ -38,7 +38,7 @@ struct VoiceParams {
     int frameMs      = 20;
     int bitrateBps   = 12000;
     bool opusFec     = true;
-    bool opusDtx     = true;
+    bool opusDtx     = false;   // debug için kapalı (istersen tekrar true)
     int expectedLoss = 15;
 };
 
@@ -58,10 +58,10 @@ public:
 // -------- Basit VAD --------
 class SimpleVAD {
 public:
-    void configure(float thRms = 500.0f, int hangMs = 150);
+    void configure(float thRms = 300.0f, int hangMs = 150);
     bool isSpeech(const int16_t* pcm, int n, int sampleRate);
 private:
-    int hangSamples_ = 0, remain_ = 0; float thr_=500.f;
+    int hangSamples_ = 0, remain_ = 0; float thr_=300.f;
 };
 
 // -------- Opus codec --------
@@ -101,6 +101,8 @@ class VoiceEngine {
 public:
     bool init(const VoiceParams& vp, ITransport* tr, uint32_t convId);
     void setPtt(bool down);
+    void setLocalEcho(bool on) { localEcho_ = on; }
+    void setBypassVad(bool on) { bypassVad_ = on; }
     void pollOnce();
     void shutdown();
 private:
@@ -114,6 +116,9 @@ private:
     OpusCodec codec_;
     JitterBuffer jb_{3};
     NoiseSuppressorSpeex ns_;   // NS/AGC
+
+    bool localEcho_ = false;
+    bool bypassVad_ = false;
 
     void onRx(const uint8_t* data, size_t len);
 };

@@ -15,32 +15,24 @@ struct PaState {
     int sampleRate = 16000;
     int channels = 1;
     int frameSamples = 320; // 20ms @16k
-    std::vector<int16_t> inBuf;
 };
 PaState g;
-}
-
-static int inputCb(const void* input, void*, unsigned long frames,
-                   const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*) {
-    if (!input) return paContinue;
-    const int16_t* src = static_cast<const int16_t*>(input);
-    if (frames == (unsigned long)g.frameSamples) {
-        g.inBuf.assign(src, src + g.frameSamples);
-    }
-    return paContinue;
 }
 
 bool AudioIO::startCapture(int sampleRate, int channels) {
     Pa_Initialize();
     g.sampleRate = sampleRate; g.channels = channels;
     g.frameSamples = frameSamples(sampleRate, 20);
+
     PaStreamParameters inParams{};
     inParams.device = Pa_GetDefaultInputDevice();
     inParams.channelCount = channels;
     inParams.sampleFormat = paInt16;
     inParams.suggestedLatency = 0.02;
+
+    // Bloklu okuma (callback yok)
     if (Pa_OpenStream(&g.in, &inParams, nullptr, sampleRate, g.frameSamples,
-                      paNoFlag, inputCb, nullptr) != paNoError) return false;
+                      paNoFlag, nullptr, nullptr) != paNoError) return false;
     return Pa_StartStream(g.in) == paNoError;
 }
 
@@ -56,14 +48,9 @@ bool AudioIO::startPlayback(int sampleRate, int channels) {
 }
 
 bool AudioIO::readFrame(std::vector<int16_t>& outPcm) {
-    using namespace std::chrono_literals;
-    for (int i=0;i<50;i++) { // ~1s timeout
-        if ((int)g.inBuf.size() == g.frameSamples) {
-            outPcm = g.inBuf;
-            return true;
-        }
-        std::this_thread::sleep_for(10ms);
-    }
+    outPcm.resize(g.frameSamples);
+    PaError pe = Pa_ReadStream(g.in, outPcm.data(), g.frameSamples);
+    if (pe == paNoError || pe == paInputOverflowed) return true;
     return false;
 }
 
@@ -162,12 +149,12 @@ bool VoiceEngine::init(const VoiceParams& vp, ITransport* tr, uint32_t convId){
     int frameSamples = audio_.frameSamples(vp_.sampleRate, vp_.frameMs);
     ns_.init(vp_.sampleRate, frameSamples, /*AGC*/true, /*NS dB*/-15);
 
-    vad_.configure(500.f, 150);
+    vad_.configure(300.f, 150);
     tr_->onReceive([this](const uint8_t* d, size_t l){ onRx(d,l); });
     return true;
 }
 
-void VoiceEngine::setPtt(bool){ /* PTT durumu dışarıdan yönetilecek */ }
+void VoiceEngine::setPtt(bool){ /* dışarıdan yönetilecek */ }
 
 void VoiceEngine::onRx(const uint8_t* data, size_t len){
     if (len < sizeof(MeshVoiceHeader)) return;
@@ -184,7 +171,7 @@ void VoiceEngine::pollOnce(){
     std::vector<int16_t> pcm;
     if (audio_.readFrame(pcm)) {
         ns_.process(pcm.data(), (int)pcm.size());
-        bool speech = vad_.isSpeech(pcm.data(), (int)pcm.size(), vp_.sampleRate);
+        bool speech = bypassVad_ ? true : vad_.isSpeech(pcm.data(), (int)pcm.size(), vp_.sampleRate);
         if (speech) {
             uint8_t encBuf[400];
             size_t encLen = codec_.encode(pcm.data(), (int)pcm.size(), encBuf, sizeof(encBuf));
@@ -199,6 +186,10 @@ void VoiceEngine::pollOnce(){
                 std::vector<uint8_t> pkt(sizeof(hdr) + encLen);
                 std::memcpy(pkt.data(), &hdr, sizeof(hdr));
                 std::memcpy(pkt.data()+sizeof(hdr), encBuf, encLen);
+
+                if (localEcho_) {
+                    onRx(pkt.data(), pkt.size());
+                }
                 tr_->send(pkt.data(), pkt.size());
             }
         }

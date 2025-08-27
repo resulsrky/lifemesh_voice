@@ -4,7 +4,6 @@
 #include <thread>
 #include <string>
 
-// POSIX soket tipleri icin bu UCLU dahil sart:
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -29,7 +28,7 @@ private:
     std::thread rxThread_;
     RxHandler rx_;
 
-    ::sockaddr_in remote_{};   // global namespace’teki tanim
+    ::sockaddr_in remote_{};
     uint16_t localPort_;
 
     bool openSocket(uint16_t localPort);

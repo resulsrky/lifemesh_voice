@@ -1,9 +1,7 @@
 #pragma once
 #include <cstdint>
 
-// Eğer SpeexDSP bulunursa gerçek impl; aksi halde stub
 #ifdef LIFEMESH_HAVE_SPEEXDSP
-
 class NoiseSuppressorSpeex {
 public:
     bool init(int sampleRate, int frameSamples, bool enableAgc = true, int noiseSuppressDb = -15);
@@ -17,15 +15,11 @@ private:
     bool  agc_ = true;
     int   nsDb_ = -15;
 };
-
 #else
-
-// Stub: kitaplık yoksa derleme devam eder, işlev yok
 class NoiseSuppressorSpeex {
 public:
     bool init(int, int, bool=true, int=-15) { return false; }
     void process(int16_t*, int) {}
     void shutdown() {}
 };
-
 #endif

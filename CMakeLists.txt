@@ -145,7 +145,4 @@ if (WIN32)
 endif()
 
 # Çalıştırma:
-#   ./loopback <localPort> <remoteIp> <remotePort>
-# Örn:
-#   A: ./loopback 5000 192.168.1.23 5001
-#   B: ./loopback 5001 192.168.1.23 5000
+#   ./loopback <localPort> <remoteIp> <remotePort> [echo] [bypass]

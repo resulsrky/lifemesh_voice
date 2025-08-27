@@ -12,16 +12,16 @@ bool NoiseSuppressorSpeex::init(int sampleRate, int frameSamples, bool enableAgc
     int i = 1;
     speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_DENOISE, &i);
 
-    i = nsDb_; // dB (-10 .. -20 tipik)
+    i = nsDb_;
     speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, &i);
 
-    i = 0; // VAD kapalı (kendi VAD’imiz var)
+    i = 0; // VAD kapalı: kendi VAD’imiz var
     speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_VAD, &i);
 
     i = agc_ ? 1 : 0;
     speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_AGC, &i);
 
-    int agcLevel = 30000; // hedef amplitude (~RMS). int olmalı
+    int agcLevel = 30000; // int olmalı
     speex_preprocess_ctl((SpeexPreprocessState*)st_, SPEEX_PREPROCESS_SET_AGC_TARGET, &agcLevel);
 
     i = 0; // dereverb kapalı
@@ -40,5 +40,5 @@ void NoiseSuppressorSpeex::shutdown(){
 }
 
 #else
-// stub’da tanımlar header’da
+// stub
 #endif
