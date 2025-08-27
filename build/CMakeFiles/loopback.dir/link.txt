@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/loopback.dir/src/VoiceEngine.cpp.o CMakeFiles/loopback.dir/src/UdpTransport.cpp.o CMakeFiles/loopback.dir/src/NoiseSuppressorSpeex.cpp.o CMakeFiles/loopback.dir/src/main_udp.cpp.o -o loopback  -lopus -lportaudio -lasound -lm -lpthread -lspeexdsp 

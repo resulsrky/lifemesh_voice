@@ -1,0 +1,151 @@
+cmake_minimum_required(VERSION 3.20)
+project(lifemesh_voice LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+if (MSVC)
+    add_compile_options(/W4)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+set(SRC_FILES
+        src/VoiceEngine.cpp
+        src/UdpTransport.cpp
+        src/NoiseSuppressorSpeex.cpp
+        src/main_udp.cpp
+)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+find_package(PkgConfig QUIET)
+
+# -------- libopus -> OPUS::OPUS --------
+set(HAVE_OPUS FALSE)
+find_package(opus CONFIG QUIET)
+if (opus_FOUND AND TARGET opus::opus)
+    add_library(OPUS::OPUS INTERFACE IMPORTED)
+    target_link_libraries(OPUS::OPUS INTERFACE opus::opus)
+    set(HAVE_OPUS TRUE)
+endif()
+if (NOT HAVE_OPUS AND PkgConfig_FOUND)
+    pkg_check_modules(OPUS_PKG QUIET opus)
+    if (OPUS_PKG_FOUND)
+        add_library(OPUS::OPUS INTERFACE IMPORTED)
+        target_include_directories(OPUS::OPUS INTERFACE ${OPUS_PKG_INCLUDE_DIRS})
+        target_link_libraries(OPUS::OPUS INTERFACE ${OPUS_PKG_LIBRARIES})
+        set(HAVE_OPUS TRUE)
+    endif()
+endif()
+if (NOT HAVE_OPUS)
+    find_path(OPUS_INCLUDE_DIR opus/opus.h PATH_SUFFIXES include)
+    find_library(OPUS_LIBRARY NAMES opus)
+    if (OPUS_INCLUDE_DIR AND OPUS_LIBRARY)
+        add_library(OPUS::OPUS INTERFACE IMPORTED)
+        target_include_directories(OPUS::OPUS INTERFACE ${OPUS_INCLUDE_DIR})
+        target_link_libraries(OPUS::OPUS INTERFACE ${OPUS_LIBRARY})
+        set(HAVE_OPUS TRUE)
+    endif()
+endif()
+if (NOT HAVE_OPUS)
+    message(FATAL_ERROR "libopus bulunamadı. Linux: 'sudo apt install libopus-dev'  | vcpkg: 'vcpkg install opus'")
+endif()
+
+# -------- PortAudio -> PORTAUDIO::PORTAUDIO --------
+set(HAVE_PORTAUDIO FALSE)
+find_package(portaudio CONFIG QUIET)
+find_package(PortAudio CONFIG QUIET)
+find_package(unofficial-portaudio CONFIG QUIET)
+foreach(_cand PortAudio::PortAudio portaudio unofficial::portaudio)
+    if (TARGET ${_cand} AND NOT HAVE_PORTAUDIO)
+        add_library(PORTAUDIO::PORTAUDIO INTERFACE IMPORTED)
+        target_link_libraries(PORTAUDIO::PORTAUDIO INTERFACE ${_cand})
+        set(HAVE_PORTAUDIO TRUE)
+    endif()
+endforeach()
+if (NOT HAVE_PORTAUDIO AND PkgConfig_FOUND)
+    pkg_check_modules(PORTAUDIO_PKG QUIET portaudio-2.0)
+    if (PORTAUDIO_PKG_FOUND)
+        add_library(PORTAUDIO::PORTAUDIO INTERFACE IMPORTED)
+        target_include_directories(PORTAUDIO::PORTAUDIO INTERFACE ${PORTAUDIO_PKG_INCLUDE_DIRS})
+        target_link_libraries(PORTAUDIO::PORTAUDIO INTERFACE ${PORTAUDIO_PKG_LIBRARIES})
+        set(HAVE_PORTAUDIO TRUE)
+    endif()
+endif()
+if (NOT HAVE_PORTAUDIO)
+    find_path(PORTAUDIO_INCLUDE_DIR portaudio.h PATH_SUFFIXES include portaudio)
+    find_library(PORTAUDIO_LIBRARY NAMES portaudio portaudio_static)
+    if (PORTAUDIO_INCLUDE_DIR AND PORTAUDIO_LIBRARY)
+        add_library(PORTAUDIO::PORTAUDIO INTERFACE IMPORTED)
+        target_include_directories(PORTAUDIO::PORTAUDIO INTERFACE ${PORTAUDIO_INCLUDE_DIR})
+        target_link_libraries(PORTAUDIO::PORTAUDIO INTERFACE ${PORTAUDIO_LIBRARY})
+        set(HAVE_PORTAUDIO TRUE)
+    endif()
+endif()
+if (NOT HAVE_PORTAUDIO)
+    message(FATAL_ERROR "PortAudio bulunamadı. Linux: 'sudo apt install portaudio19-dev'  | vcpkg: 'vcpkg install portaudio'")
+endif()
+
+# -------- SpeexDSP (opsiyonel) -> SPEEXDSP::SPEEXDSP + define --------
+set(HAVE_SPEEXDSP FALSE)
+find_package(SpeexDSP CONFIG QUIET)
+if (TARGET SpeexDSP::speexdsp)
+    add_library(SPEEXDSP::SPEEXDSP INTERFACE IMPORTED)
+    target_link_libraries(SPEEXDSP::SPEEXDSP INTERFACE SpeexDSP::speexdsp)
+    set(HAVE_SPEEXDSP TRUE)
+endif()
+if (NOT HAVE_SPEEXDSP AND PkgConfig_FOUND)
+    pkg_check_modules(SPEEXDSP_PKG QUIET speexdsp)
+    if (SPEEXDSP_PKG_FOUND)
+        add_library(SPEEXDSP::SPEEXDSP INTERFACE IMPORTED)
+        target_include_directories(SPEEXDSP::SPEEXDSP INTERFACE ${SPEEXDSP_PKG_INCLUDE_DIRS})
+        target_link_libraries(SPEEXDSP::SPEEXDSP INTERFACE ${SPEEXDSP_PKG_LIBRARIES})
+        set(HAVE_SPEEXDSP TRUE)
+    endif()
+endif()
+if (NOT HAVE_SPEEXDSP)
+    find_path(SPEEXDSP_INCLUDE_DIR speex/speex_preprocess.h)
+    find_library(SPEEXDSP_LIBRARY NAMES speexdsp)
+    if (SPEEXDSP_INCLUDE_DIR AND SPEEXDSP_LIBRARY)
+        add_library(SPEEXDSP::SPEEXDSP INTERFACE IMPORTED)
+        target_include_directories(SPEEXDSP::SPEEXDSP INTERFACE ${SPEEXDSP_INCLUDE_DIR})
+        target_link_libraries(SPEEXDSP::SPEEXDSP INTERFACE ${SPEEXDSP_LIBRARY})
+        set(HAVE_SPEEXDSP TRUE)
+    endif()
+endif()
+
+add_executable(loopback ${SRC_FILES})
+
+if (UNIX)
+    target_compile_definitions(loopback PRIVATE _DEFAULT_SOURCE)
+endif()
+
+target_link_libraries(loopback
+        PRIVATE
+        OPUS::OPUS
+        PORTAUDIO::PORTAUDIO
+)
+
+if (HAVE_SPEEXDSP)
+    target_link_libraries(loopback PRIVATE SPEEXDSP::SPEEXDSP)
+    target_compile_definitions(loopback PRIVATE LIFEMESH_HAVE_SPEEXDSP=1)
+else()
+    message(WARNING "SpeexDSP bulunamadı; NS/AGC stub ile çalışacak. Linux: sudo apt install libspeexdsp-dev")
+endif()
+
+if (UNIX AND NOT APPLE)
+    find_package(Threads REQUIRED)
+    target_link_libraries(loopback PRIVATE Threads::Threads)
+endif()
+
+if (WIN32)
+    message(STATUS "Not: UdpTransport POSIX. Windows için Winsock portu gerekir (WSAStartup, sendto/recvfrom).")
+endif()
+
+# Çalıştırma:
+#   ./loopback <localPort> <remoteIp> <remotePort>
+# Örn:
+#   A: ./loopback 5000 192.168.1.23 5001
+#   B: ./loopback 5001 192.168.1.23 5000

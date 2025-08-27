@@ -1,0 +1,3 @@
+/home/resul/CLionProjects/voice_lifemesh/build/CMakeFiles/loopback.dir
+/home/resul/CLionProjects/voice_lifemesh/build/CMakeFiles/edit_cache.dir
+/home/resul/CLionProjects/voice_lifemesh/build/CMakeFiles/rebuild_cache.dir
