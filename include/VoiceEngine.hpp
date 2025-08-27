@@ -6,22 +6,27 @@
 #include <queue>
 #include <mutex>
 #include <optional>
+#include <string>
 
 #include "NoiseSuppressorSpeex.hpp"
+#include "RttProbe.hpp"
+#include "RttEchoServer.hpp"
 
+// -------- Paket başlığı (media) --------
 #pragma pack(push,1)
 struct MeshVoiceHeader {
     uint8_t  version = 1;
-    uint8_t  codec   = 1;
-    uint8_t  flags   = 0;
+    uint8_t  codec   = 1;      // 1=Opus
+    uint8_t  flags   = 0;      // bit0=PTT
     uint8_t  hop     = 0;
     uint16_t seq     = 0;
     uint32_t convId  = 0;
-    uint32_t tsMs    = 0;
+    uint32_t tsMs    = 0;      // sender send time
     uint16_t payLen  = 0;
 };
 #pragma pack(pop)
 
+// -------- Transport arayüzü --------
 class ITransport {
 public:
     using RxHandler = std::function<void(const uint8_t*, size_t)>;
@@ -30,15 +35,17 @@ public:
     virtual ~ITransport() = default;
 };
 
+// -------- Parametreler --------
 struct VoiceParams {
     int sampleRate   = 16000;
     int frameMs      = 20;
-    int bitrateBps   = 12000;
-    bool opusFec     = true;
-    bool opusDtx     = false;  // debug için kapalı
-    int expectedLoss = 15;
+    int bitrateBps   = 16000; // başlangıç biraz yüksek
+    bool opusFec     = true;  // FEC hep açık
+    bool opusDtx     = false; // debug için kapalı
+    int expectedLoss = 10;
 };
 
+// -------- Audio I/O --------
 class AudioIO {
 public:
     bool startCapture(int sampleRate, int channels);
@@ -49,10 +56,10 @@ public:
     int  frameSamples(int sampleRate, int frameMs) const {
         return sampleRate * frameMs / 1000;
     }
-    // EKLE: tercih edilen cihaz indekslerini (PortAudio index) ayarla
     void setPreferredDevices(int inIndex, int outIndex);
 };
 
+// -------- Basit VAD --------
 class SimpleVAD {
 public:
     void configure(float thRms = 300.0f, int hangMs = 150);
@@ -61,18 +68,21 @@ private:
     int hangSamples_ = 0, remain_ = 0; float thr_=300.f;
 };
 
+// -------- Opus codec --------
 class OpusCodec {
 public:
     bool initEnc(int sampleRate, int bitrateBps, bool fec, bool dtx, int expectedLoss);
     bool initDec(int sampleRate);
     size_t encode(const int16_t* pcm, int samples, uint8_t* out, size_t outMax);
     size_t decode(const uint8_t* in, size_t inLen, int16_t* pcmOut, size_t maxSamples);
+    void  reconfigure(int bitrateBps, int fec, int lossPerc);
     ~OpusCodec();
 private:
     struct OpusEncoder* enc_ = nullptr;
     struct OpusDecoder* dec_ = nullptr;
 };
 
+// -------- Jitter buffer --------
 struct EncodedFrame {
     uint16_t seq;
     std::vector<uint8_t> payload;
@@ -91,9 +101,9 @@ private:
     std::mutex m_;
 };
 
+// -------- VoiceEngine --------
 class VoiceEngine {
 public:
-    // Cihaz tercihlerini init'ten ÖNCE ayarla (PortAudio index; -1 = varsayılan)
     void setDevices(int inIndex, int outIndex);
     bool init(const VoiceParams& vp, ITransport* tr, uint32_t convId);
     void setPtt(bool down);
@@ -102,9 +112,13 @@ public:
     void pollOnce();
     void shutdown();
 
-    // Sayaç getter'ları
+    void enableEchoServer(uint16_t port){ runEcho_=true; echoPort_=port; }
+    void enableRttProbe(const std::string& remoteIp, uint16_t remoteEchoPort,
+                        const std::string& localIp="0.0.0.0", uint16_t localPort=0);
+
     uint64_t txFrames() const { return txFrames_; }
     uint64_t rxFrames() const { return rxFrames_; }
+    double   rttMs()    const { return rttProbe_ ? rttProbe_->rttMs() : -1.0; }
 
 private:
     VoiceParams vp_;
@@ -123,6 +137,12 @@ private:
 
     uint64_t txFrames_ = 0;
     uint64_t rxFrames_ = 0;
+
+    // RTT / Echo
+    RttProbe* rttProbe_ = nullptr;
+    RttEchoServer* echoSrv_ = nullptr;
+    bool runEcho_ = false;
+    uint16_t echoPort_ = 7002;
 
     void onRx(const uint8_t* data, size_t len);
 };

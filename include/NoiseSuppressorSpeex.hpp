@@ -5,7 +5,7 @@
 class NoiseSuppressorSpeex {
 public:
     bool init(int sampleRate, int frameSamples, bool enableAgc = true, int noiseSuppressDb = -15);
-    void process(int16_t* pcm, int nSamples); // in-place
+    void process(int16_t* pcm, int nSamples);
     void shutdown();
     ~NoiseSuppressorSpeex(){ shutdown(); }
 private:

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <thread>
 #include <algorithm>
+#include <iostream>
 
 // ---------- AudioIO ----------
 namespace {
@@ -15,8 +16,8 @@ struct PaState {
     int sampleRate = 16000;
     int channels = 1;
     int frameSamples = 320; // 20ms @16k
-    int inIndex = -1;       // tercih edilen input cihaz index (PortAudio)
-    int outIndex = -1;      // tercih edilen output cihaz index
+    int inIndex = -1;
+    int outIndex = -1;
 };
 PaState g;
 }
@@ -35,7 +36,7 @@ bool AudioIO::startCapture(int sampleRate, int channels) {
     inParams.device = (g.inIndex >= 0 ? g.inIndex : Pa_GetDefaultInputDevice());
     inParams.channelCount = channels;
     inParams.sampleFormat = paInt16;
-    inParams.suggestedLatency = 0.05; // 50 ms daha toleranslı
+    inParams.suggestedLatency = 0.05;
 
     if (Pa_OpenStream(&g.in, &inParams, nullptr, sampleRate, g.frameSamples,
                       paNoFlag, nullptr, nullptr) != paNoError) return false;
@@ -110,6 +111,12 @@ size_t OpusCodec::decode(const uint8_t* in, size_t inLen, int16_t* pcmOut, size_
     int n = opus_decode(dec_, in, (opus_int32)inLen, pcmOut, (int)maxSamples, 0);
     return n>0 ? (size_t)n : 0;
 }
+void OpusCodec::reconfigure(int bitrateBps, int fec, int lossPerc){
+    if (!enc_) return;
+    opus_encoder_ctl(enc_, OPUS_SET_BITRATE(bitrateBps));
+    opus_encoder_ctl(enc_, OPUS_SET_INBAND_FEC(fec?1:0));
+    opus_encoder_ctl(enc_, OPUS_SET_PACKET_LOSS_PERC(lossPerc));
+}
 OpusCodec::~OpusCodec(){
     if(enc_) opus_encoder_destroy(enc_);
     if(dec_) opus_decoder_destroy(dec_);
@@ -140,12 +147,13 @@ std::optional<EncodedFrame> JitterBuffer::popReady(){
     return std::nullopt;
 }
 
-// ---------- VoiceEngine ----------
+// ---------- helpers ----------
 static uint32_t nowMs(){
     using namespace std::chrono;
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+// ---------- VoiceEngine ----------
 void VoiceEngine::setDevices(int inIndex, int outIndex){
     audio_.setPreferredDevices(inIndex, outIndex);
 }
@@ -154,15 +162,36 @@ bool VoiceEngine::init(const VoiceParams& vp, ITransport* tr, uint32_t convId){
     vp_=vp; tr_=tr; convId_=convId;
     if (!audio_.startCapture(vp.sampleRate,1)) return false;
     if (!audio_.startPlayback(vp.sampleRate,1)) return false;
-    if (!codec_.initEnc(vp.sampleRate, vp.bitrateBps, vp.opusFec, vp.opusDtx, vp.expectedLoss)) return false;
+
+    // FEC hep açık
+    if (!codec_.initEnc(vp.sampleRate, vp.bitrateBps, /*fec*/true, vp.opusDtx, vp.expectedLoss)) return false;
     if (!codec_.initDec(vp.sampleRate)) return false;
 
     int frameSamples = audio_.frameSamples(vp_.sampleRate, vp_.frameMs);
-    ns_.init(vp_.sampleRate, frameSamples, /*AGC*/true, /*NS dB*/-15);
+    ns_.init(vp_.sampleRate, frameSamples, /*AGC*/true, /*NS dB*/-20);
 
     vad_.configure(300.f, 150);
     tr_->onReceive([this](const uint8_t* d, size_t l){ onRx(d,l); });
+
+    // Echo server istenmişse
+    if (runEcho_) {
+        echoSrv_ = new RttEchoServer(echoPort_);
+        if (!echoSrv_->start()) {
+            std::cerr << "[RTT] Echo server start failed on port " << echoPort_ << "\n";
+        }
+    }
+
     return true;
+}
+
+void VoiceEngine::enableRttProbe(const std::string& remoteIp, uint16_t remoteEchoPort,
+                                 const std::string& localIp, uint16_t localPort){
+    if (rttProbe_) return;
+    rttProbe_ = new RttProbe(remoteIp, remoteEchoPort, localIp, localPort);
+    if (!rttProbe_->start()){
+        std::cerr << "[RTT] probe start failed\n";
+        delete rttProbe_; rttProbe_ = nullptr;
+    }
 }
 
 void VoiceEngine::setPtt(bool){}
@@ -178,6 +207,8 @@ void VoiceEngine::onRx(const uint8_t* data, size_t len){
 }
 
 void VoiceEngine::pollOnce(){
+    uint32_t now = nowMs();
+
     // ---- TX
     std::vector<int16_t> pcm;
     if (audio_.readFrame(pcm)) {
@@ -191,7 +222,7 @@ void VoiceEngine::pollOnce(){
                 hdr.flags = 0b00000001; // PTT
                 hdr.seq = ++seq_;
                 hdr.convId = convId_;
-                hdr.tsMs = nowMs();
+                hdr.tsMs = now;
                 hdr.payLen = (uint16_t)encLen;
 
                 std::vector<uint8_t> pkt(sizeof(hdr) + encLen);
@@ -211,19 +242,33 @@ void VoiceEngine::pollOnce(){
         std::vector<int16_t> outPcm( audio_.frameSamples(vp_.sampleRate, vp_.frameMs) );
         size_t ns = codec_.decode(ready->payload.data(), ready->payload.size(),
                                   outPcm.data(), outPcm.size());
-        if (ns>0) {
-            outPcm.resize(ns);
-            audio_.writeFrame(outPcm);
-            rxFrames_++;
-        } else {
-            std::vector<int16_t> zeros(outPcm.size(), 0);
-            audio_.writeFrame(zeros);
-        }
+        if (ns>0) { outPcm.resize(ns); audio_.writeFrame(outPcm); rxFrames_++; }
+        else { std::vector<int16_t> zeros(outPcm.size(), 0); audio_.writeFrame(zeros); }
     } else {
-        // underrun azalt: paket yoksa sessizlik bas
         std::vector<int16_t> zeros( audio_.frameSamples(vp_.sampleRate, vp_.frameMs), 0 );
         audio_.writeFrame(zeros);
     }
+
+    // ---- Basit ABR (RTT EWMA -> bitrate), FEC=1 sabit
+    static uint32_t lastAdapt=0;
+    if (rttProbe_ && now - lastAdapt >= 1000){
+        lastAdapt = now;
+        double rtt = rttProbe_->rttMs(); // <0 ise ölçülmedi
+        if (rtt >= 0) {
+            int target_bps;
+            if (rtt < 120)       target_bps = 32000;
+            else if (rtt < 200)  target_bps = 24000;
+            else if (rtt < 400)  target_bps = 16000;
+            else                 target_bps = 12000;
+            int lossPerc = (rtt < 200 ? 5 : (rtt < 400 ? 10 : 20));
+            codec_.reconfigure(target_bps, /*fec*/1, lossPerc);
+            // std::cout << "[ABR] rtt≈" << rtt << " ms -> " << target_bps << " bps (FEC=1, loss="<<lossPerc<<"%)\n";
+        }
+    }
 }
 
-void VoiceEngine::shutdown(){ audio_.stop(); }
+void VoiceEngine::shutdown(){
+    if (rttProbe_) { rttProbe_->stop(); delete rttProbe_; rttProbe_=nullptr; }
+    if (echoSrv_)  { echoSrv_->stop();  delete echoSrv_;  echoSrv_=nullptr;  }
+    audio_.stop();
+}

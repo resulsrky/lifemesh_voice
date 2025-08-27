@@ -15,6 +15,8 @@ set(SRC_FILES
         src/VoiceEngine.cpp
         src/UdpTransport.cpp
         src/NoiseSuppressorSpeex.cpp
+        src/RttProbe.cpp
+        src/RttEchoServer.cpp
         src/main_udp.cpp
 )
 
@@ -22,7 +24,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 find_package(PkgConfig QUIET)
 
-# -------- libopus -> OPUS::OPUS --------
+# -------- opus
 set(HAVE_OPUS FALSE)
 find_package(opus CONFIG QUIET)
 if (opus_FOUND AND TARGET opus::opus)
@@ -50,10 +52,10 @@ if (NOT HAVE_OPUS)
     endif()
 endif()
 if (NOT HAVE_OPUS)
-    message(FATAL_ERROR "libopus bulunamadı. Linux: 'sudo apt install libopus-dev'  | vcpkg: 'vcpkg install opus'")
+    message(FATAL_ERROR "libopus bulunamadı. Linux: sudo apt install libopus-dev")
 endif()
 
-# -------- PortAudio -> PORTAUDIO::PORTAUDIO --------
+# -------- PortAudio
 set(HAVE_PORTAUDIO FALSE)
 find_package(portaudio CONFIG QUIET)
 find_package(PortAudio CONFIG QUIET)
@@ -85,10 +87,10 @@ if (NOT HAVE_PORTAUDIO)
     endif()
 endif()
 if (NOT HAVE_PORTAUDIO)
-    message(FATAL_ERROR "PortAudio bulunamadı. Linux: 'sudo apt install portaudio19-dev'  | vcpkg: 'vcpkg install portaudio'")
+    message(FATAL_ERROR "PortAudio bulunamadı. Linux: sudo apt install portaudio19-dev")
 endif()
 
-# -------- SpeexDSP (opsiyonel) -> SPEEXDSP::SPEEXDSP + define --------
+# -------- SpeexDSP (opsiyonel)
 set(HAVE_SPEEXDSP FALSE)
 find_package(SpeexDSP CONFIG QUIET)
 if (TARGET SpeexDSP::speexdsp)
@@ -122,17 +124,12 @@ if (UNIX)
     target_compile_definitions(loopback PRIVATE _DEFAULT_SOURCE)
 endif()
 
-target_link_libraries(loopback
-        PRIVATE
-        OPUS::OPUS
-        PORTAUDIO::PORTAUDIO
-)
-
+target_link_libraries(loopback PRIVATE OPUS::OPUS PORTAUDIO::PORTAUDIO)
 if (HAVE_SPEEXDSP)
     target_link_libraries(loopback PRIVATE SPEEXDSP::SPEEXDSP)
     target_compile_definitions(loopback PRIVATE LIFEMESH_HAVE_SPEEXDSP=1)
 else()
-    message(WARNING "SpeexDSP bulunamadı; NS/AGC stub ile çalışacak. Linux: sudo apt install libspeexdsp-dev")
+    message(WARNING "SpeexDSP yok; NS/AGC stub çalışacak. Linux: sudo apt install libspeexdsp-dev")
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -140,9 +137,6 @@ if (UNIX AND NOT APPLE)
     target_link_libraries(loopback PRIVATE Threads::Threads)
 endif()
 
-if (WIN32)
-    message(STATUS "Not: UdpTransport POSIX. Windows için Winsock portu gerekir (WSAStartup, sendto/recvfrom).")
-endif()
-
 # Çalıştırma:
 #   ./loopback <localPort> <remoteIp> <remotePort> [echo] [bypass]
+#               [--list] [--in N] [--out M] [--echo-port P] [--rtt IP:PORT]
